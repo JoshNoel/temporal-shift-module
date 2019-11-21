@@ -36,6 +36,7 @@ After compiled with TVM, our model can efficient run on low-power devices.
 
 ## Step-by-step Tutorial
 
+### Jetson Nano Setup
 We show how to set up the environment on Jetson Nano, compile the PyTorch model with TVM, and perform the online demo from camera streaming.
 
 1. Get an [NVIDIA Jeston Nano](https://developer.nvidia.com/embedded/jetson-nano-developer-kit) board (it is only $99!).
@@ -91,6 +92,49 @@ python3 main.py
 ```
 
 Press `Q` or `Esc` to quit. Press `F` to enter/exit full-screen.
+
+### Desktop Setup
+
+We now show how to setup a desktop environment (CPU, GPU, or OPENCL) for use with the online demo. Instructions assume one is using an anaconda virtual environment, but should be transferrable to other package management systems.
+
+1. Create a new environment & install python prerequisites (**PyTorch**, **torchvision**, **numpy**, **opencv**).
+```
+conda create -n "tsm" -c conda-forge -c pytorch numpy opencv pytorch torchvision
+conda activate tsm
+
+# conda-forge onnx is outdated for windows (As of 11/2019)
+pip install onnx
+```
+
+2. Fulfill **LLVM & LLD** requirement. On Windows, one must build from source as prebuilt binaries excludes cmake files.
+	- Follow instructions at https://github.com/llvm/llvm-project to build LLVM with cmake option –DLLVM_ENABLE_PROJECTS=’lld’
+
+3. Build **TVM**. Unix platforms see *Jetson Nano Setup* step (5). Windows instructions below.
+```
+git clone --recursive https://github.com/dmlc/tvm
+cd tvm; mkdir build; cd build
+
+# By default: <llvm-config.cmake path> = <llvm_install>/lib/cmake/llvm
+# For earlier versions of Visual Studio instead of “–G ‘<name>’ –A x64”, the option is instead “–G ‘<name> x64’”
+cmake -G "Visual Studio 16 2019" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_CONFIGURATION_TYPES="Release" -DLLVM_DIR=<llvm-config.cmake path> ..
+
+cmake –build . –config Release
+cmake --build . --config Release --target nnvm_compiler
+
+# Ensure <install_path> is in %PATH%.
+# Alternatively, <install_path> is a temporary directory from which one copies all files to: <conda_environment_path>\
+    # <conda_environment_path> can be found by running “where python” while the given environment is active
+cmake -DCMAKE_INSTALL_PREFIX=<install_path> -P cmake_install.cmake 
+
+cd ..\tvm\python; python setup.py install; cd ..
+cd nnvm\python; python setup.py install; cd ..\..
+cd topi\python; python setup.py install; cd ..\..
+```
+
+4. **Run the demo**. --target="cuda" by default. See 'python main.py --help' for additional targets.
+```
+python main.py --target="cuda"
+```
 
 ## Supported Gestures
 

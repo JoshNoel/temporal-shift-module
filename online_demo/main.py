@@ -1,5 +1,7 @@
 import numpy as np
 import os
+import re
+import argparse
 from typing import Tuple
 import io
 import tvm
@@ -34,12 +36,24 @@ def torch2tvm_module(torch_module: torch.nn.Module, torch_inputs: Tuple[torch.Te
         onnx_model = onnx.load_model(buffer)
         relay_module, params = tvm.relay.frontend.from_onnx(onnx_model, shape=input_shapes)
     with tvm.relay.build_config(opt_level=3):
-        graph, tvm_module, params = tvm.relay.build(relay_module, target, params=params)
+        graph, tvm_module, params = tvm.relay.build(relay_module, target=target, params=params)
     return graph, tvm_module, params
 
 
 def torch2executor(torch_module: torch.nn.Module, torch_inputs: Tuple[torch.Tensor, ...], target):
-    prefix = f"mobilenet_tsm_tvm_{target}"
+    target_str = 'cuda'
+
+    # If 'cross_compile' == True, then tvm runtime will be compiled for 'target', but not context will be created
+    cross_compile = False
+    # For llvm targets, extract human readable target
+    if target.startswith('llvm'):
+        target_str = 'cpu'
+        re_platform = re.match(r'.*-target=([^\s]*)', target)
+        if re_platform:
+            cross_compile = True
+            target_str = re_platform.group(1)
+
+    prefix = f"mobilenet_tsm_tvm_{target_str}"
     lib_fname = f'{prefix}.tar'
     graph_fname = f'{prefix}.json'
     params_fname = f'{prefix}.params'
@@ -50,16 +64,28 @@ def torch2executor(torch_module: torch.nn.Module, torch_inputs: Tuple[torch.Tens
         params = tvm.relay.load_param_dict(bytearray(open(params_fname, 'rb').read()))
     else:
         graph, tvm_module, params = torch2tvm_module(torch_module, torch_inputs, target)
-        tvm_module.export_library(lib_fname)
-        with open(graph_fname, 'wt') as f:
+        fcompile = None
+        if "android" in target:
+            fcompile = tvm.contrib.ndk.create_shared
+        tvm_module.export_library(lib_fname, fcompile)
+        with open(graph_fname, 'wt', newline='\n') as f:
             f.write(graph)
         with open(params_fname, 'wb') as f:
             f.write(tvm.relay.save_param_dict(params))
 
-    ctx = tvm.gpu() if target.startswith('cuda') else tvm.cpu()
-    graph_module = graph_runtime.create(graph, tvm_module, ctx)
-    for pname, pvalue in params.items():
-        graph_module.set_input(pname, pvalue)
+    ctx = None
+    graph_module = None
+    # Only create runtime if this is not cross-compilation
+    if not cross_compile:
+        if target.startswith('cuda'):
+            ctx = tvm.gpu()
+        elif target.startswith('opencl'):
+            ctx = tvm.opencl()
+        elif target.startswith('llvm'):
+            ctx = tvm.cpu()
+        graph_module = graph_runtime.create(graph, tvm_module, ctx)
+        for pname, pvalue in params.items():
+            graph_module.set_input(pname, pvalue)
 
     def executor(inputs: Tuple[tvm.nd.NDArray]):
         for index, value in enumerate(inputs):
@@ -70,7 +96,7 @@ def torch2executor(torch_module: torch.nn.Module, torch_inputs: Tuple[torch.Tens
     return executor, ctx
 
 
-def get_executor():
+def get_executor(target):
     torch_module = MobileNetV2(n_class=27)
     if not os.path.exists("mobilenetv2_jester_online.pth.tar"):  # checkpoint not downloaded
         print('Downloading PyTorch checkpoint...')
@@ -89,7 +115,7 @@ def get_executor():
                     torch.zeros([1, 12, 14, 14]),
                     torch.zeros([1, 20, 7, 7]),
                     torch.zeros([1, 20, 7, 7]))
-    return torch2executor(torch_module, torch_inputs, target='cuda')
+    return torch2executor(torch_module, torch_inputs, target=target)
 
 
 def transform(frame: np.ndarray):
@@ -252,7 +278,11 @@ def process_output(idx_, history):
 
 
 WINDOW_NAME = 'Video Gesture Recognition'
-def main():
+def run(target='cuda', print_log=True, callback_fn=lambda output: None):
+    """
+    target: {'cuda', 'opencl', 'llvm [-target={LLVM_TARGET}]'
+        * -target implies cross compilation. LLVM_TARGET is one of llvm cross compilation targets. See: https://clang.llvm.org/docs/CrossCompilation.html
+    """
     print("Open camera...")
     cap = cv2.VideoCapture(0)
     
@@ -275,7 +305,7 @@ def main():
     print("Build transformer...")
     transform = get_transform()
     print("Build Executor...")
-    executor, ctx = get_executor()
+    executor, ctx = get_executor(target)
     buffer = (
         tvm.nd.empty((1, 3, 56, 56), ctx=ctx),
         tvm.nd.empty((1, 4, 28, 28), ctx=ctx),
@@ -289,7 +319,7 @@ def main():
         tvm.nd.empty((1, 20, 7, 7), ctx=ctx)
     )
     idx = 0
-    history = [2]
+    history = [2,2]
     history_logit = []
     history_timing = []
 
@@ -313,8 +343,8 @@ def main():
                 feat_np = feat.asnumpy().reshape(-1)
                 feat_np -= feat_np.max()
                 softmax = np.exp(feat_np) / np.sum(np.exp(feat_np))
-
-                print(max(softmax))
+                if print_log:
+                    print(max(softmax))
                 if max(softmax) > SOFTMAX_THRES:
                     idx_ = np.argmax(feat.asnumpy(), axis=1)[0]
                 else:
@@ -329,9 +359,11 @@ def main():
                 idx_ = np.argmax(avg_logit, axis=1)[0]
 
             idx, history = process_output(idx_, history)
+            callback_fn(idx)
 
             t2 = time.time()
-            print(f"{index} {catigories[idx]}")
+            if print_log:
+                print(f"{index} {catigories[idx]}")
 
 
             current_time = t2 - t1
@@ -378,5 +410,8 @@ def main():
     cap.release()
     cv2.destroyAllWindows()
 
-
-main()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--target', default='cuda', nargs='?', help="Target for compilation. If set to 'llvm -target={LLVM_TARGET}', cross compilation is assumed. See run() function for additional details.")
+    args = parser.parse_args()
+    run(target=args.target)
