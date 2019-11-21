@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">TSM</string>
+    <string name="load_model">Loading Model:\u0020</string>
+    <string name="fail_load_model">Failed to load model:\u0020</string>
+    <string name="gesture_default_text">No Output</string>
+</resources>
