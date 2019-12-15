@@ -333,7 +333,7 @@ class gmaps_wrapper:
             sgn = 1
         elif gesture == "Stop Sign":
             stop = True
-        elif gesture == "Thumb Up":
+        elif gesture == "Thumb Down":
             reset = True
         elif gesture == "Zooming In With Full Hand" and not self.streetView:
             zoom_delta = 1
@@ -350,7 +350,7 @@ class gmaps_wrapper:
                 if self.streetView:
                     streetView_toggled = True
                 self.streetView = False
-        elif gesture == "Thumb Down" and self.streetViewOverlay:
+        elif gesture == "Thumb Up" and self.streetViewOverlay:
             streetView_gesture = True
             if self.toggle_streetView_start == 0:
                 self.toggle_streetView_start = cur_time
