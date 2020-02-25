@@ -72,6 +72,10 @@ JS_FMT_STR = ["""
     var showingStreetViewOverlay = false;
     var showingStreetView = false;
 
+    function log(val) {{
+        console.log(val);
+    }}
+
     function initMap() {{
         // Init map
         map = new google.maps.Map(win.document.getElementById('map'), {{
@@ -177,14 +181,14 @@ JS_FMT_STR = ["""
         }
     }
     function update_map(data_str) {
-        console.log("Update Map");
+        log("Update Map");
         var data = null;
         try {
             data = JSON.parse(data_str.content.text.trim());
-            console.log(data);
+            log(data);
         } catch(err) {
-            console.log("Error parsing output:");
-            console.log(data_str.content);
+            log("Error parsing output:");
+            log(data_str.content);
         }
         var velocity = data[0];
         var zoom = data[1];
@@ -192,15 +196,15 @@ JS_FMT_STR = ["""
         var streetOverlay = data[3] == 1;
         var streetView = data[4] == 1;
         var reset = data[5] == 1;
-        console.log("s_zoom: ", panorama.getZoom());
-        console.log("s_pov: ", panorama.getPov());
+        log("s_zoom: ", panorama.getZoom());
+        log("s_pov: ", panorama.getPov());
 
-        console.log("velocity: ", velocity);
-        console.log("zoom: ", zoom);
-        console.log("moveDirection: ", moveDirection);
-        console.log("Diff0: ", diff0);
-        console.log("Diff1: ", diff1);
-        console.log("Link: ", chosen_link);
+        log("velocity: ", velocity);
+        log("zoom: ", zoom);
+        log("moveDirection: ", moveDirection);
+        log("Diff0: ", diff0);
+        log("Diff1: ", diff1);
+        log("Link: ", chosen_link);
 
         center_marker.setPosition(map.getCenter());
         if (streetOverlay != showingStreetViewOverlay) {
