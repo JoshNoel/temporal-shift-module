@@ -5,6 +5,9 @@ import online_demo.main as online_demo
 from IPython.display import HTML, display, clear_output
 from threading import Thread
 import time
+import asyncio
+import websockets
+import json
 
 category_dict = {idx: action for idx,action in enumerate(online_demo.catigories)}
 
@@ -71,6 +74,9 @@ JS_FMT_STR = ["""
     var overlay = null;
     var showingStreetViewOverlay = false;
     var showingStreetView = false;
+
+    // Setup websocket interface
+    var datasocket = new WebSocket("ws://localhost:8000");
 
     function log(val) {{
         console.log(val);
@@ -173,14 +179,9 @@ JS_FMT_STR = ["""
         return links[opt_link];
     }
 
-    // Setup python callbacks
-    var kernel = IPython.notebook.kernel;
-    var callbacks = {
-        iopub : {
-            output : update_map,
-        }
-    }
-    function update_map(data_str) {
+    // Setup websocket recv interface
+    datasocket.onmessage = function update_map(event) {
+        data_str = event.data;
         log("Update Map");
         var data = null;
         try {
@@ -238,7 +239,7 @@ JS_FMT_STR = ["""
     }
     function poll_tsm() {
         if (map != null) {
-            kernel.execute("gmaps.poll_pos()", callbacks);
+            datasocket.send("DataReq");
         }
     }
 
@@ -286,6 +287,9 @@ class gmaps_wrapper:
         self.last_gesture_time = 0
         self.last_gesture = 2 # No Gesture
 
+        self.dataserver_thread = None
+        self.dataserver = None
+
     # Printing returns the current position to javascript
     def poll_pos(self):
         # Update street zoom in python. Allows sharing of zoom parameter between map and streetView.
@@ -300,7 +304,7 @@ class gmaps_wrapper:
         data = [self.velocity, zoom, self.move_direction, streetViewOverlay, streetView, reset]
         self.reset = False
         self.move_direction = 0
-        print(str(data), end="")
+        return data
 
     # Only account for new gestures if GAP_CHANGE has passed
     # checks if appropriate time has passed to detect a new gesture
@@ -459,6 +463,23 @@ class gmaps_wrapper:
         self.pos = [start_loc[0]+offset[0], start_loc[1]+offset[1]]
         map_src = get_html(pos=self.pos, zoom=self.zoom, api_key=self.api_key)
         display(HTML(map_src))
+
+        self.dataserver_thread = Thread(target=self.start_dataserver)
+        self.dataserver_thread.start()
+
+    async def serve_data(self, websocket, path):
+        while True:
+            req = await websocket.recv()
+            if req == "DataReq":
+                data = self.poll_pos()
+                await websocket.send(json.dumps(data))
+
+    def start_dataserver(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self.dataserver = websockets.serve(self.serve_data, "localhost", 8000)
+        loop.run_until_complete(self.dataserver)
+        loop.run_forever()
 
     def run(self, target='cuda'):
         self.tsm_thread = Thread(target=online_demo.run, kwargs={"target":target, "print_log":False, "callback_fn":self.callback})
